@@ -1,0 +1,276 @@
+########################################################
+#                                                      #
+#   Remember to set FDTD boundary layers manually!!!   #
+#                                                      #
+########################################################
+deleteall;
+clear;
+########################
+#                      #
+#   global constants   #
+#                      #
+########################
+
+theta = pi/6;
+theta_degree = 30;
+
+# Variables for graphene layer
+Length = 600e-9; 		# length of intersection leg
+Width = 200e-9; 		# thickness of intersection leg
+Offset = 0e-9; 		# positive offset pushes center vertices "outwards" and vice versa
+Smoothness = 10; 		# determines the number of vertices used to make the curved sections of each side
+Distance = 100e-9;		# determines how much of the side is curved
+Centerpoint = Width*tan(theta)/2;	# y-component of the intersection's centerpoint, x-component is zero
+
+# Variables for mode or ports
+Width_mode=400e-9;
+Port_distance = 275e-9; 	# Should be x_range - 25e-9
+
+# Variables for FDTD, mesh, and monitors
+sim_time = 5e-12;
+sim_temp = 300;
+
+#######################
+#   please fix FDTD   #
+#######################
+
+x_range = 600e-9;
+y_range = 600e-9;
+z_range = 400e-9;
+
+mesh_x = 10e-9;
+mesh_y = 10e-9;
+mesh_z = 1e-9;
+
+
+
+# Setting global monitor source & monitor settings.
+setglobalmonitor("frequency points", 1); # probably not necessary
+setglobalsource("center frequency", 20e12);
+setglobalsource("frequency span", 20e12);
+
+#####################################
+#                                   #
+#   Setting matierial properties.   #
+#                                   #
+#####################################
+
+
+# Material properties to edit
+B=8; T=300; uc=0.5; gama=0.00011;  
+freq=5e12:1e10:35e12;
+
+matlabput(B,T,uc,gama,freq);
+matlab('graphene_sigma=Graphene_conductivity(B,T,uc,gama,freq);');
+matlabget(graphene_sigma);
+
+rm("testfile.txt");
+data = zeros(length(freq),4);
+for(i = 1:length(freq)) {
+    A_tempt=[graphene_sigma(1,i),graphene_sigma(2,i),0;-graphene_sigma(2,i),graphene_sigma(1,i),0;0,0,0];
+    Evl=[graphene_sigma(1,i)+1i*graphene_sigma(2,i),graphene_sigma(1,i)-1i*graphene_sigma(2,i),0];   # calculate eigenvalues
+    str = num2str(freq(i,1))+"   "+num2str(real(Evl(1)))+"   "+num2str(imag(Evl(1)))+"   "+num2str(real(Evl(2)))+"   "+num2str(imag(Evl(2)))+"   "+num2str(real(Evl(3)))+"   "+num2str(imag(Evl(3)));
+    data(i,:) = [freq(i,1), Evl(1), Evl(2), Evl(3)];
+    #datax(i,:) = [freq(i,1), graphene_sigma(1,i), graphene(2,i), 0];
+    write("testfile.txt", str);
+}
+
+Evc=eig(A_tempt,2); 			# calculate eigenvectors
+addgridattribute("matrix transform");	# add matrix transform grid attribute
+set("U",ctranspose(Evc));		# set the complex conjugate transpose of Evc to grid attribute property U 
+set("name","kerr attribute");		# set Evc to grid attribute property U
+
+if(materialexists("Graphene_test") == 1) {
+    deletematerial("Graphene_test");
+}
+
+mymaterial = addmaterial('Sampled 2D data');
+setmaterial(mymaterial, "name", "Graphene_test");
+setmaterial("Graphene_test", "Anisotropy", 1);
+setmaterial("Graphene_test", "sampled data", data);
+
+###########################
+#                         #
+#   Setup of structure.   #
+#                         #
+###########################
+
+# Find pivot point
+if(Smoothness == 0) {
+    vtx_1 = [-Width/2, 0];
+    vtx_2 = [Width/2, 0];
+    vtx_3 = [0, Width*sin(pi/3)];
+}
+else {
+    Pivot_1 = [-Width/2 - 2*Distance*sin(pi/6)*cos(pi/6), 0-2*Distance*sin(pi/6)*sin(pi/6)];
+    Pivot_2 = [Width/2 + 2*Distance*sin(pi/6)*cos(pi/6), 0-2*Distance*sin(pi/6)*sin(pi/6)];
+    Pivot_3 = [0, Width*sin(pi/3)+2*Distance*sin(pi/6)];
+    Radius = Distance*cos(pi/6);
+    vtx_1 = [Pivot_1(1) + Radius*sin(pi/6), Pivot_1(2) + Radius*cos(pi/6)];
+    vtx_2 = [Pivot_2(1) - Radius*sin(pi/6), Pivot_2(2) + Radius*cos(pi/6)];
+    vtx_3 = [Pivot_3(1) + Radius*sin(pi/6), Pivot_3(2) - Radius*cos(pi/6)];
+    Increment = (pi/3)/(2*Smoothness);
+    for(x = 1; x <= 2*Smoothness; x = x + 1) {
+        vtx_1 = [vtx_1; Pivot_1(1) + Radius*sin(pi/6 + x*Increment), Pivot_1(2) + Radius*cos(pi/6 + x*Increment)];
+        vtx_2 = [Pivot_2(1) - Radius*sin(pi/6 + x*Increment), Pivot_2(2) + Radius*cos(pi/6 + x*Increment); vtx_2];
+        vtx_3 = [vtx_3; Pivot_3(1) + Radius*sin(pi/6 - x*Increment), Pivot_3(2) - Radius*cos(pi/6 - x*Increment)];        
+        }
+}
+
+vtx = [vtx_1(:,1) - Offset*cos(theta), vtx_1(:,2) - Offset*sin(theta); -Width/2, -Length; Width/2, -Length; vtx_2(:,1) + Offset*cos(theta), vtx_2(:,2) - Offset*sin(theta); Length*cos(theta) + Width/2, Length*sin(theta); Length*cos(theta),Length*sin(theta) + Width*sin(2*theta); vtx_3(:,1), vtx_3(:,2) + Offset; -Length*cos(theta), Length*sin(theta) + Width*sin(2*theta); -Length*cos(theta) - Width/2, Length*sin(theta)];
+# vertices go in counterclockwise direction starting from the vertex between the upper-left and lower leg      
+
+
+
+# use if necessary
+#addtriangle;
+#tri_temp = Length*sin(2*pi/3)/sin(pi/6);
+#set("name", "Triangular substrate");
+#set("vertices", [-tri_temp - Width/2, -Length; tri_temp + Width/2, -Length; 0, Length*sin(pi/6) + Width*sin(pi/3) + tri_temp*sin(pi/3)]);
+#set("x", 0);
+#set("y", 0);
+#set("material", "<Object defined dielectric>");
+#set("index", 2);
+
+# add substrate
+addrect;
+set("name", "Substrate");
+set("x", 0);
+set("x span", 2*Length + Width);
+set("y", 0);
+set("y span", 2*Length + Width);
+set("z", -200e-9);
+set("z span", 400e-9);
+set("material", "<Object defined dielectric>");
+set("index", 2);
+
+
+# add Y-shaped 2D polygon
+add2dpoly;
+set("name", "Graphene intersection");
+set("surface normal",3);	# surface normal to Z-axis
+set("vertices", vtx);
+set("material", "C (graphene) - broadband - on state");
+set("x", 0);
+set("y", 0);
+set("z", 0);
+
+
+#####################################
+#                                   #
+#   Setup of simulation elements.   #
+#                                   #
+#####################################
+
+# add FDTD
+addfdtd;
+set("dimension", 2);
+set("simulation time", sim_time);
+set("simulation temperature", sim_temp);
+set("mesh type", "uniform");
+set("dx", 2*mesh_x);
+set("dy", 2*mesh_y);
+set("dz", 10*mesh_z);
+set("x min bc", "PML");
+set("x max bc", "PML");
+set("y min bc", "PML");
+set("y max bc", "PML");
+set("z min bc", "PML");
+set("z max bc", "PML");
+#manually set layers for now
+# set("PML SETTINGS - TABLE", "stabilized");
+set("x", 0);
+set("x span", x_range);
+set("y", Centerpoint);
+set("y span", y_range);
+set("z", 0);
+set("z span", z_range);
+# set boundaries
+
+
+
+
+# add mesh
+addmesh;
+# set position
+set("x", 0);
+set("x span", x_range);
+set("y", Centerpoint);
+set("y span", y_range);
+set("z", 0);
+set("z span", 50e-9);
+# set mesh step
+set("override x mesh",1);
+set("override y mesh",1);
+set("override z mesh",1);
+set("set maximum mesh step",1);
+set("dx", mesh_x);
+set("dy", mesh_y);
+set("dz", mesh_z);
+
+
+
+# add DFT monitor
+addpower;
+set("name", "Field & Power Monitor");
+set("monitor type", 7);	# 2D z-normal
+# set position
+set("x", 0);
+set("x span", x_range);
+set("y", Centerpoint);
+set("y span", y_range);
+set("z", 0);		# should be 50nm above graphene
+
+
+
+# add input port on bottom leg
+addport;
+set("name", "input port");
+set("injection axis", "y-axis");
+# set position
+set("x", 0);
+set("x span", Width_mode);
+set("y", Centerpoint - Port_distance);
+set("z", 0);
+set("z span", z_range);
+
+
+
+# add output port on upper left leg
+addport;
+set("name", "output port: LEFT");
+set("injection axis", "x-axis");
+set("THETA", -theta_degree);
+# set position
+set("x", -Port_distance*cos(theta) );
+set("y", Centerpoint + Port_distance*sin(theta) );
+set("y span", Width_mode*2/sqrt(3)); #FIXME
+set("z", 0);
+set("z span", z_range);
+
+
+
+# add output port on upper right leg
+addport;
+set("name", "output port: RIGHT");
+set("injection axis", "x-axis");
+set("THETA", theta_degree);
+set("direction", "Backward");
+# set position
+set("x", Port_distance*cos(theta) );
+set("y", Centerpoint + Port_distance*sin(theta) );
+set("y span", Width_mode*2/sqrt(3)); #FIXME
+set("z", 0);
+set("z span", z_range);
+
+
+
+## add mode source
+#addmode;
+#set("injection axis", "y");
+## set position
+#set("x", 0);
+#set("x span", Width_mode);
+#set("y", Centerpoint - Port_distance);
+#set("z", 0);
+#set("z span", z_range);
